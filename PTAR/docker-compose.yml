@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  # 0. Frontend (Interfaz Web)
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    networks:
+      - enose-net
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXTAUTH_URL=http://localhost:3000
+      - NEXTAUTH_SECRET=e9a5b3f2c7d41f8a9e6b2c4d1f3a5e7b9c1d2e4f6a8b0c3d5e7f9a1b2c4d6e8f
+    depends_on:
+      - backend
+
+  # 1. Backend (FastAPI + ML Core)
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://enose_user:enose_password@db:5432/enose_db
+    networks:
+      - enose-net
+    depends_on:
+      - db
+
+  # 2. Base de Datos (PostgreSQL)
+  db:
+    image: postgres:15
+    environment:
+      - POSTGRES_USER=enose_user
+      - POSTGRES_PASSWORD=enose_password
+      - POSTGRES_DB=enose_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - enose-net
+
+volumes:
+  postgres-data:
+
+
+networks:
+  enose-net:
+    driver: bridge
