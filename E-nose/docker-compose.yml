@@ -1,0 +1,126 @@
+version: '3.8'
+
+services:
+  # 1. Base de Datos Temporal (Para guardar lecturas de sensores)
+  influxdb:
+    image: influxdb:2.7
+    ports:
+      - "8086:8086"
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=${INFLUXDB_USERNAME}
+      - DOCKER_INFLUXDB_INIT_PASSWORD=${INFLUXDB_PASSWORD}
+      - DOCKER_INFLUXDB_INIT_ORG=${INFLUXDB_ORG}
+      - DOCKER_INFLUXDB_INIT_BUCKET=sensor_data
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUXDB_TOKEN}
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+    networks:
+      - enose-net
+
+  # 2. Object Storage (Para guardar datasets crudos - Data Lake)
+  minio:
+    image: minio/minio
+    ports:
+      - "9000:9000" # API
+      - "9001:9001" # Consola Web
+    environment:
+      - MINIO_ROOT_USER=${MINIO_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_PASSWORD}
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+    networks:
+      - enose-net
+
+  # 3. Message Broker (Para sensores físicos futuros)
+  mqtt:
+    image: eclipse-mosquitto
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mqtt/mosquitto.conf:/mosquitto/config/mosquitto.conf
+    networks:
+      - enose-net
+
+  # 4. API de Ingesta (Modificado para escribir en InfluxDB/MinIO)
+  ingest-api:
+    build: ./services/ingest-api
+    ports:
+      - "8000:8000"
+    depends_on:
+      - influxdb
+      - minio
+      - mqtt
+      - ml-service
+    environment:
+      - INFLUX_URL=http://influxdb:8086
+      - INFLUX_TOKEN=${INFLUXDB_TOKEN}
+      - INFLUX_ORG=${INFLUXDB_ORG}
+      - INFLUX_BUCKET=sensor_data
+      - MINIO_URL=minio:9000
+      - MINIO_USER=${MINIO_USER}
+      - MINIO_PASSWORD=${MINIO_PASSWORD}
+      - ML_SERVICE_URL=http://ml-service:8001
+    networks:
+      - enose-net
+
+  # 5. Servidor de MLflow (Para registrar experimentos de IA)
+  mlflow:
+    image: ghcr.io/mlflow/mlflow
+    ports:
+      - "5000:5000"
+    environment:
+      - AWS_ACCESS_KEY_ID=${MINIO_USER}
+      - AWS_SECRET_ACCESS_KEY=${MINIO_PASSWORD}
+      - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
+    command: mlflow server --backend-store-uri sqlite:///mlflow.db --default-artifact-root s3://mlflow/ --host 0.0.0.0
+    depends_on:
+      - minio
+    networks:
+      - enose-net
+
+  # 6. Servicio de ML (Modificado para leer de MLflow)
+  ml-service:
+    build: ./services/ml-service
+    ports:
+      - "8001:8001"
+    depends_on:
+      - mlflow
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    networks:
+      - enose-net
+
+  # 7. Simulador
+  simulator:
+    build: ./simulator
+    depends_on:
+      - mqtt
+      - ingest-api
+    environment:
+      - MQTT_BROKER=mqtt
+      - INGEST_URL=http://ingest-api:8000/ingest
+    networks:
+      - enose-net
+
+  # 8. Frontend Next.js para E-nose
+  frontend:
+    build: ./frontend
+    ports:
+      - "3001:3000"
+    depends_on:
+      - ingest-api
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    networks:
+      - enose-net
+
+volumes:
+  influxdb-data:
+  minio-data:
+
+
+networks:
+  enose-net:
+    driver: bridge
